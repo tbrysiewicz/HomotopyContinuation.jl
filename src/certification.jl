@@ -1707,3 +1707,113 @@ function distinct_certified_solutions!(
 
     return d
 end
+
+"""
+    partition_result_iterator(RI::ResultIterator, predicate::Function)
+
+Partition a [`ResultIterator`](@ref) into multiple iterators based on a predicate function.
+
+Takes a result iterator and a function `predicate` which takes the elements of the result iterator
+and maps them to any other type. Returns a vector of `ResultIterator`s, one for each distinct value 
+returned by the predicate function. The partitioning is implemented by creating bitmasks that 
+indicate which elements belong to each partition.
+
+## Arguments
+- `RI::ResultIterator`: The result iterator to partition
+- `predicate::Function`: A function that takes an element from the iterator and returns a value 
+  used for partitioning
+
+## Returns
+A `Vector{ResultIterator}` where each iterator contains the elements that produced the same 
+value when passed to the predicate function.
+
+## Example
+```julia
+@var x;
+
+F = System([x^7+3*x^2+1]);
+
+RI = solve(F; iterator_only=true)
+ResultIterator
+==============
+•  start solutions: PolyhedralStartSolutionsIterator
+•  homotopy: Polyhedral
+
+RI_partition = HomotopyContinuation.partition_result_iterator(RI,x->imag(x.solution[1])>0);
+
+(length(RI_partition[1]), length(RI_partition[2]))
+(4,3)
+```
+
+## See Also
+TODO: Add references to related functions if any exist
+"""
+function partition_result_iterator(RI::ResultIterator, predicate::Function)
+    partitions = Dict{Any,BitVector}()
+    d = length(RI)
+    index = 1
+    for res in RI
+        key = predicate(res)
+        if !haskey(partitions, key)
+            partitions[key] = BitVector([false for i in 1:d])
+        end
+        partitions[key][index] = true
+        index += 1
+    end
+
+    #now we return a vector of ResultIterators, one for each partition 'p' by setting the bitmask to be partitions[pt]
+
+    partitioned_iterators = Vector{ResultIterator}([])
+    all_keys = Vector{Any}([])
+    for (key, bm) in partitions
+        push!(partitioned_iterators, ResultIterator(RI.starts, RI.S, bm))
+        push!(all_keys,key)
+    end
+
+    return (partitioned_iterators,all_keys)
+end
+
+function trace_partition(RI::ResultIterator)
+    result_iterator_trace = trace(RI)/length(RI)
+    function trace_signature(PR::PathResult)
+        s = solution(PR)
+        signature = BitVector([])
+        for i in 1:length(s)
+            if real(s[i]) > real(result_iterator_trace[i])
+                push!(signature, true)
+            elseif real(s[i]) < real(result_iterator_trace[i])
+                push!(signature, false)
+            end
+            if imag(s[i]) > imag(result_iterator_trace[i])
+                push!(signature, true)
+            elseif imag(s[i]) < imag(result_iterator_trace[i])
+                push!(signature, false)
+            end
+        end
+        return(signature)
+    end
+    return(partition_result_iterator(RI, trace_signature))
+end
+
+# Creates a vector of result iterators by running trace_partition on RI until each partition has k or fewer elements
+function partition_until_small(RI::ResultIterator, k::Int64)
+    RI_buckets = Vector{ResultIterator}([RI])
+    while max(length.(RI_buckets)...) > k
+        new_RI_buckets = Vector{ResultIterator}()
+        for current_RI in RI_buckets
+            println("Length: ", length(current_RI))
+            if length(current_RI) <= k
+                push!(new_RI_buckets, current_RI)
+            else
+                println("Breaking up")
+                (partitions,_) = trace_partition(current_RI)
+                println("Broke up into parts of sizes ",length.(partitions))
+                for p in partitions
+                    push!(new_RI_buckets, p)
+                end
+            end
+        end
+        RI_buckets = new_RI_buckets
+    end
+    return RI_buckets
+end
