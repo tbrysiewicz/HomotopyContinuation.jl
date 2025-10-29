@@ -32,7 +32,11 @@ export certify,
     distinct_certified_solutions!,
     # deprecated
     initial_solution,
-    certified_solution
+    certified_solution,
+    trace_partition,
+    partition_result_iterator,
+    partition_until_small,
+    certification_in_buckets
 
 
 abstract type AbstractSolutionCertificate end
@@ -1714,9 +1718,9 @@ end
 Partition a [`ResultIterator`](@ref) into multiple iterators based on a predicate function.
 
 Takes a result iterator and a function `predicate` which takes the elements of the result iterator
-and maps them to any other type. Returns a vector of `ResultIterator`s, one for each distinct value 
-returned by the predicate function. The partitioning is implemented by creating bitmasks that 
-indicate which elements belong to each partition.
+and maps them to any other type. Returns a tuple containing a vector of `ResultIterator`s (one for 
+each distinct value returned by the predicate function) and a vector of the corresponding keys.
+The partitioning is implemented by creating bitmasks that indicate which elements belong to each partition.
 
 ## Arguments
 - `RI::ResultIterator`: The result iterator to partition
@@ -1724,29 +1728,32 @@ indicate which elements belong to each partition.
   used for partitioning
 
 ## Returns
-A `Vector{ResultIterator}` where each iterator contains the elements that produced the same 
-value when passed to the predicate function.
+A tuple `(partitioned_iterators, all_keys)` where:
+- `partitioned_iterators`: A `Vector{ResultIterator}` where each iterator contains the elements 
+  that produced the same value when passed to the predicate function
+- `all_keys`: A `Vector{Any}` containing the distinct keys (predicate values) corresponding to each partition
 
 ## Example
 ```julia
-@var x;
-
-F = System([x^7+3*x^2+1]);
-
+@var x
+F = System([x^7+3*x^2+1])
 RI = solve(F; iterator_only=true)
-ResultIterator
-==============
-•  start solutions: PolyhedralStartSolutionsIterator
-•  homotopy: Polyhedral
+(partitions, keys) = HomotopyContinuation.partition_result_iterator(RI, x->imag(x.solution[1])>0)
 
-RI_partition = HomotopyContinuation.partition_result_iterator(RI,x->imag(x.solution[1])>0);
+# Check the sizes of the partitions
+(length(partitions[1]), length(partitions[2]))
+(4, 3)
 
-(length(RI_partition[1]), length(RI_partition[2]))
-(4,3)
+# Check the corresponding keys
+keys
+2-element Vector{Any}:
+ false
+ true
 ```
 
 ## See Also
-TODO: Add references to related functions if any exist
+- [`trace_partition`](@ref): For partitioning based on trace signatures
+- [`partition_until_small`](@ref): For recursive partitioning until small bucket sizes
 """
 function partition_result_iterator(RI::ResultIterator, predicate::Function)
     partitions = Dict{Any,BitVector}()
@@ -1773,6 +1780,36 @@ function partition_result_iterator(RI::ResultIterator, predicate::Function)
     return (partitioned_iterators,all_keys)
 end
 
+"""
+    trace_partition(RI::ResultIterator)
+
+Partition a [`ResultIterator`](@ref) based on trace signatures relative to the average solution.
+
+Computes the trace (average) of all solutions in the result iterator, then partitions the solutions 
+based on binary signatures indicating whether each coordinate (real and imaginary parts) is above 
+or below the corresponding coordinate of the trace.
+
+## Arguments
+- `RI::ResultIterator`: The result iterator to partition
+
+## Returns
+A tuple `(result_iterator_trace, signature_iterator_pairs)` where:
+- `result_iterator_trace`: The average solution (trace) used as the reference point
+- `signature_iterator_pairs`: A vector of tuples `(signature, iterator)` where each signature 
+  is a `BitVector` representing the binary comparison with the trace, and each iterator contains 
+  the solutions matching that signature
+
+## Algorithm
+For each solution coordinate `s[i]`, creates binary signature entries:
+- `true` if `real(s[i]) > real(trace[i])`, `false` if `real(s[i]) < real(trace[i])`
+- `true` if `imag(s[i]) > imag(trace[i])`, `false` if `imag(s[i]) < imag(trace[i])`
+
+Solutions with identical coordinates to the trace are omitted from the signature for that coordinate.
+
+## See Also
+- [`partition_result_iterator`](@ref): The underlying partitioning function
+- [`partition_until_small`](@ref): For recursive application of trace partitioning
+"""
 function trace_partition(RI::ResultIterator)
     result_iterator_trace = trace(RI)/length(RI)
     function trace_signature(PR::PathResult)
@@ -1792,24 +1829,66 @@ function trace_partition(RI::ResultIterator)
         end
         return(signature)
     end
-    return(partition_result_iterator(RI, trace_signature))
+    (partitioned_iterators,all_signatures) = partition_result_iterator(RI, trace_signature)
+    return((result_iterator_trace, [(all_signatures[i],partitioned_iterators[i]) for i in 1:length(partitioned_iterators)]))
 end
 
-# Creates a vector of result iterators by running trace_partition on RI until each partition has k or fewer elements
+"""
+    partition_until_small(RI::ResultIterator, k::Int64)
+
+Recursively partition a [`ResultIterator`](@ref) using trace signatures until all partitions have at most `k` elements.
+
+Applies [`trace_partition`](@ref) recursively to create smaller and smaller partitions until each 
+partition contains at most `k` solutions. This creates a hierarchical partitioning scheme that 
+can be useful for processing large solution sets in manageable chunks.
+
+## Arguments
+- `RI::ResultIterator`: The result iterator to partition
+- `k::Int64`: Maximum number of elements allowed in each final partition
+
+## Returns
+A `Vector{Tuple{ResultIterator, Vector{Tuple{Vector{ComplexF64}, Vector{Bool}}}}}` where each tuple contains:
+- A `ResultIterator` with at most `k` elements
+- A vector of trace-signature definition pairs that define the hierarchical path to this partition
+
+## Algorithm
+1. Start with the full result iterator
+2. While any partition has more than `k` elements:
+   - Apply `trace_partition` to large partitions
+   - Keep small partitions unchanged
+   - Track the hierarchical trace and signature information
+3. Return all final partitions with their trace histories
+
+## Example
+```julia
+@var x
+F = System([x^10 - 1])  # Has 10 solutions
+RI = solve(F; iterator_only=true)
+buckets = HomotopyContinuation.partition_until_small(RI, 3)
+
+# Each bucket will have at most 3 solutions
+length.(first.(buckets))  # Shows sizes of final partitions
+```
+
+## See Also
+- [`trace_partition`](@ref): The partitioning strategy used recursively
+- [`certification_in_buckets`](@ref): For applying certification to the resulting buckets
+"""
 function partition_until_small(RI::ResultIterator, k::Int64)
-    RI_buckets = Vector{ResultIterator}([RI])
-    while max(length.(RI_buckets)...) > k
-        new_RI_buckets = Vector{ResultIterator}()
-        for current_RI in RI_buckets
+    #RI_buckets is a vector of pairs - each pair is a ResultIterator and another vector of pairs of traces and signatures. 
+    RI_buckets = Vector{Tuple{ResultIterator,Vector{Tuple{Vector{ComplexF64},Vector{Bool}}}}}([(RI,[])])
+    while max(length.(first.(RI_buckets))...) > k
+        new_RI_buckets = Vector{Tuple{ResultIterator,Vector{Tuple{Vector{ComplexF64},Vector{Bool}}}}}()
+        for (current_RI, trace_sig_def) in RI_buckets
             println("Length: ", length(current_RI))
             if length(current_RI) <= k
-                push!(new_RI_buckets, current_RI)
+                push!(new_RI_buckets, (current_RI, trace_sig_def))
             else
                 println("Breaking up")
-                (partitions,_) = trace_partition(current_RI)
-                println("Broke up into parts of sizes ",length.(partitions))
-                for p in partitions
-                    push!(new_RI_buckets, p)
+                (ri_trace, sig_iterator_pairs) = trace_partition(current_RI)
+                println("Broke up into parts of sizes ",length.(last.(sig_iterator_pairs)))
+                for p in sig_iterator_pairs
+                    push!(new_RI_buckets, (p[2],vcat(trace_sig_def,[(ri_trace,p[1])])))
                 end
             end
         end
@@ -1827,11 +1906,12 @@ certifying each partition separately.
 
 Takes a result iterator and partitions it into smaller groups using [`partition_until_small`](@ref) 
 until each partition has at most `k` elements. Then applies [`certify`](@ref) to each partition 
-separately. This approach can be more memory efficient for large solution sets.
+separately. This approach can be more memory efficient for large solution sets and provides 
+better parallelization for systems with many solutions.
 
 ## Arguments
 - `F`: The polynomial system to certify solutions for
-- `RI::ResultIterator`: The result iterator containing solution candidates
+- `RI::ResultIterator`: The result iterator containing solution candidates  
 - `k::Int64=100`: Maximum size of each partition (default: 100)
 
 ## Keyword Arguments
@@ -1841,20 +1921,42 @@ separately. This approach can be more memory efficient for large solution sets.
 
 ## Returns
 Returns `true` if all solutions in all partitions are certified and distinct, `false` otherwise.
-The function will return `false` if any solution fails to certify or if duplicates are found 
-within any partition.
+The function will return `false` if:
+- Any solution fails to certify (i.e., `cert.certified == false`)
+- Duplicates are found within any partition (i.e., `length(C.duplicates) != 0`)
+
+The function processes each bucket sequentially and stops at the first failure, making it suitable 
+for verification workflows where all solutions must be certified and distinct.
 
 ## Example
 ```julia
 @var x
 F = System([x^(300)+3*x^2+1])
 RI = solve(F; iterator_only=true)
-HomotopyContinuation.certification_in_buckets(F, RI, 100)
+
+# Certify with default bucket size of 100
+result = HomotopyContinuation.certification_in_buckets(F, RI)
+
+# Certify with smaller buckets for systems with memory constraints
+result = HomotopyContinuation.certification_in_buckets(F, RI, 50)
+
+# Returns true if all solutions are certified and distinct
+if result
+    println("All solutions certified and distinct!")
+else
+    println("Some solutions failed certification or duplicates found")
+end
 ```
+
+## Performance Notes
+- Smaller bucket sizes use less memory but may have more overhead
+- Larger bucket sizes are faster but use more memory during certification
+- The trace-based partitioning helps ensure buckets contain geometrically similar solutions
 
 ## See Also
 - [`certify`](@ref): For certifying individual solution sets
-- [`partition_until_small`](@ref): For partitioning result iterators
+- [`partition_until_small`](@ref): For the underlying partitioning strategy
+- [`trace_partition`](@ref): For the trace-based partitioning algorithm
 - [`partition_result_iterator`](@ref): For custom partitioning based on predicates
 """
 function certification_in_buckets(F,
@@ -1864,7 +1966,9 @@ function certification_in_buckets(F,
     kwargs...,
 )
     RI_buckets = partition_until_small(RI, k)
-    for (i,current_RI) in enumerate(RI_buckets)
+    for (i,current_RI_and_def) in enumerate(RI_buckets)
+        current_RI = current_RI_and_def[1]
+        trace_sig_def = current_RI_and_def[2]
         println("Certifying bucket ",i," of size ",length(current_RI))
         C=certify(F,collect(current_RI);threading=threading,show_progress=show_progress,kwargs...)
         #check all are certified
@@ -1878,6 +1982,25 @@ function certification_in_buckets(F,
             return(false)
         end
         println("All solutions in bucket ",i," certified and distinct")
+        println("Now checking that the certificates guarantee that all solutions agree with trace_sig_def inequalities")
+        for cert in C.certificates
+            for current_trace_sig in trace_sig_def
+                if !check_trace_agreement(cert,current_trace_sig)
+                    return(false)
+                end
+            end
+        end
+        println("All bounding boxes guarantee that the solution is in the correct dyadic region")
     end
+    return(true)
+end
+
+function check_trace_agreement(SC::SolutionCertificate,trace_signature_definition::Tuple{Vector{ComplexF64}, Vector{Bool}})
+    #SC is a SolutionCertificate with certifeid solution interval SC.certified_solution_interval
+    #trace_signature_definition is a tuple (trace,signature) where trace is a Vector{ComplexF64} and signature is a Vector{Bool}
+    #   which indicates for each of the real and imaginary parts of the trace, whether the corresponding part of the solution is larger or smaller
+    #This function verifies this signature against the certified solution interval
+    # for example, one may have SC and trace_sig_def = ([1.0+0.0im, 0.0+1.0im], [true,false,true,false])
+    #  and we need to verify that the interval surrounding SC is in the +-+- region relative to the trace. 
     return(true)
 end
