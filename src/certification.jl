@@ -1817,3 +1817,67 @@ function partition_until_small(RI::ResultIterator, k::Int64)
     end
     return RI_buckets
 end
+
+
+"""
+    certification_in_buckets(F, RI::ResultIterator, k::Int64=100; threading::Bool = true, show_progress::Bool = true, kwargs...)
+
+Certify solutions from a [`ResultIterator`](@ref) by partitioning them into smaller buckets and 
+certifying each partition separately.
+
+Takes a result iterator and partitions it into smaller groups using [`partition_until_small`](@ref) 
+until each partition has at most `k` elements. Then applies [`certify`](@ref) to each partition 
+separately. This approach can be more memory efficient for large solution sets.
+
+## Arguments
+- `F`: The polynomial system to certify solutions for
+- `RI::ResultIterator`: The result iterator containing solution candidates
+- `k::Int64=100`: Maximum size of each partition (default: 100)
+
+## Keyword Arguments
+- `threading::Bool = true`: Whether to use threading in the certification process
+- `show_progress::Bool = true`: Whether to show progress bars during certification
+- `kwargs...`: Additional keyword arguments passed to [`certify`](@ref)
+
+## Returns
+Returns `true` if all solutions in all partitions are certified and distinct, `false` otherwise.
+The function will return `false` if any solution fails to certify or if duplicates are found 
+within any partition.
+
+## Example
+```julia
+@var x
+F = System([x^(300)+3*x^2+1])
+RI = solve(F; iterator_only=true)
+HomotopyContinuation.certification_in_buckets(F, RI, 100)
+```
+
+## See Also
+- [`certify`](@ref): For certifying individual solution sets
+- [`partition_until_small`](@ref): For partitioning result iterators
+- [`partition_result_iterator`](@ref): For custom partitioning based on predicates
+"""
+function certification_in_buckets(F,
+    RI::ResultIterator,k::Int64=100;
+    threading::Bool = true,
+    show_progress::Bool = true,
+    kwargs...,
+)
+    RI_buckets = partition_until_small(RI, k)
+    for (i,current_RI) in enumerate(RI_buckets)
+        println("Certifying bucket ",i," of size ",length(current_RI))
+        C=certify(F,collect(current_RI);threading=threading,show_progress=show_progress,kwargs...)
+        #check all are certified
+        for cert in C.certificates
+            if cert.certified == false
+                return(false)
+            end
+        end
+        #check length of duplicates in C is 0
+        if length(C.duplicates) != 0
+            return(false)
+        end
+        println("All solutions in bucket ",i," certified and distinct")
+    end
+    return(true)
+end
