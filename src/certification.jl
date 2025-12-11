@@ -1870,6 +1870,8 @@ buckets = HomotopyContinuation.partition_until_small(RI, 3)
 length.(first.(buckets))  # Shows sizes of final partitions
 ```
 
+### TODO: Add functionality to pass the discriminating points, and if not passed, compute the trace and several points near
+##     it for extra discrimination. 
 ## See Also
 - [`trace_partition`](@ref): The partitioning strategy used recursively
 - [`certification_in_buckets`](@ref): For applying certification to the resulting buckets
@@ -1995,7 +1997,7 @@ function certification_in_buckets(F,
     return(true)
 end
 
-function check_trace_agreement(SC::SolutionCertificate,trace_signature_definition::Tuple{Vector{ComplexF64}, Vector{Bool}})
+function check_trace_agreement(SC::SolutionCertificate,trace_signature_definition::Vector{Vector{ComplexF64}, Vector{Bool}})
     #SC is a SolutionCertificate with certifeid solution interval SC.certified_solution_interval
     #trace_signature_definition is a tuple (trace,signature) where trace is a Vector{ComplexF64} and signature is a Vector{Bool}
     #   which indicates for each of the real and imaginary parts of the trace, whether the corresponding part of the solution is larger or smaller
