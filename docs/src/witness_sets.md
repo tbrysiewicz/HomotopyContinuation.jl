@@ -14,6 +14,11 @@ To compute a [`WitnessSet`](@ref) call [`witness_set`](@ref).
 witness_set
 ```
 
+A [`WitnessSet`](@ref) carries information about irreducibility.
+```@docs
+is_irreducible
+```
+
 To compute witness sets for all possible dimensions use [`regeneration`](@ref) or [`witness_sets`](@ref).
 
 ```@docs
@@ -24,6 +29,19 @@ Witness sets can be decomposed into [irreducible components](https://en.wikipedi
 
 ```@docs
 decompose
+```
+
+Membership in witness sets can be tested.
+
+```@docs
+membership
+```
+
+One can intersect a witness set with a hypersurface.
+
+```@docs
+Base.intersect(::WitnessSet, ::WitnessSet)
+Base.intersect(::WitnessSet, ::Expression)
 ```
 
 ## Numerical Irreducible Decomposition

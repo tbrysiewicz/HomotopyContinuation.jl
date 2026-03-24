@@ -285,11 +285,13 @@
         l2 = rand_subspace(2; codim = 1)
 
         _solver, starts = solver_startsolutions(slice(F, l1), slice(F, l2))
-        @test _solver.trackers[1].tracker.homotopy isa ExtrinsicSubspaceHomotopy
+        @test _solver.trackers[1].tracker.homotopy isa IntrinsicSubspaceHomotopy
 
         @var x y
         r1 = solve(F; target_subspace = l1, compile = false)
         @test nsolutions(r1) == 2
+        r1c = solve(F; target_subspace = l1, start_system = :total_degree)
+        @test nsolutions(r1c) == 2
         r2 = solve(
             F,
             solutions(r1);
@@ -310,13 +312,13 @@
         )
         @test nsolutions(r3) == 2
 
-        @var x y z u v
-        F = System([x^2 + y^2 - 5], [x, y, z, u, v])
-        l1 = rand_subspace(5; dim = 1)
-        l2 = rand_subspace(5; dim = 1)
+        @var x y z
+        F = System([x^2 + y^2 - 5; x * y + 1], [x, y, z])
+        l1 = rand_subspace(3; dim = 2)
+        l2 = rand_subspace(3; dim = 2)
 
         _solver, starts = solver_startsolutions(slice(F, l1), slice(F, l2))
-        @test _solver.trackers[1].tracker.homotopy isa IntrinsicSubspaceHomotopy
+        @test _solver.trackers[1].tracker.homotopy isa ExtrinsicSubspaceHomotopy
     end
 
     @testset "solve (Vector{Expression})" begin
