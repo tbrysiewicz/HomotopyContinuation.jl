@@ -1,4 +1,4 @@
-using Arblib: Acb, AcbRef, AcbVector, AcbRefVector, AcbMatrix, AcbRefMatrix
+using Arblib: Acb, AcbRef, AcbVector, AcbRefVector, AcbMatrix, AcbRefMatrix, getinterval
 
 export certify,
     SolutionCertificate,
@@ -1997,12 +1997,57 @@ function certification_in_buckets(F,
     return(true)
 end
 
-function check_trace_agreement(SC::SolutionCertificate,trace_signature_definition::Vector{Vector{ComplexF64}, Vector{Bool}})
-    #SC is a SolutionCertificate with certifeid solution interval SC.certified_solution_interval
+function check_trace_agreement(SC::SolutionCertificate, trace_signature_definition::Tuple{Vector{ComplexF64}, Vector{Bool}})
+    #SC is a SolutionCertificate with certified solution interval SC.I
+    I = SC.I
+    
+    #Get the real and imaginary parts of the interval
+    real_part = [getinterval(i) for i in real(I)] #ith element is a Tuple{Arf,Arf}, the upper and lower bound of the interval at index i
+    imag_part = [getinterval(i) for i in imag(I)] 
+
+    part_interval = [[real_part[i], imag_part[i]] for i in 1:length(real_part)]
+
     #trace_signature_definition is a tuple (trace,signature) where trace is a Vector{ComplexF64} and signature is a Vector{Bool}
     #   which indicates for each of the real and imaginary parts of the trace, whether the corresponding part of the solution is larger or smaller
-    #This function verifies this signature against the certified solution interval
-    # for example, one may have SC and trace_sig_def = ([1.0+0.0im, 0.0+1.0im], [true,false,true,false])
-    #  and we need to verify that the interval surrounding SC is in the +-+- region relative to the trace. 
+    trace = trace_signature_definition[1]
+    signature = trace_signature_definition[2]
+    
+    # Verify that each interval respects the signature constraints
+    # signature[2i-1] corresponds to real part of trace[i]
+    # signature[2i] corresponds to imaginary part of trace[i]
+    for i in 1:length(trace)
+        trace_val = trace[i]
+        real_interval = part_interval[i][1]  # (lower, upper) bounds for real part
+        imag_interval = part_interval[i][2]  # (lower, upper) bounds for imaginary part
+        
+        # Check real part constraint
+        real_sig_idx = 2*i - 1
+        if real_sig_idx <= length(signature)
+            if signature[real_sig_idx]  # real part should be > real(trace)
+                if real_interval[1] <= real(trace_val)
+                    return(false)
+                end
+            else  # real part should be < real(trace)
+                if real_interval[2] >= real(trace_val)
+                    return(false)
+                end
+            end
+        end
+        
+        # Check imaginary part constraint
+        imag_sig_idx = 2*i
+        if imag_sig_idx <= length(signature)
+            if signature[imag_sig_idx]  # imag part should be > imag(trace)
+                if imag_interval[1] <= imag(trace_val)
+                    return(false)
+                end
+            else  # imag part should be < imag(trace)
+                if imag_interval[2] >= imag(trace_val)
+                    return(false)
+                end
+            end
+        end
+    end
+    
     return(true)
 end
