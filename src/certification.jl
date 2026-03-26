@@ -1,4 +1,4 @@
-using Arblib: Acb, AcbRef, AcbVector, AcbRefVector, AcbMatrix, AcbRefMatrix, getinterval
+using Arblib: Acb, AcbRef, AcbVector, AcbRefVector, AcbMatrix, AcbRefMatrix, Arf, getinterval
 
 export certify,
     SolutionCertificate,
@@ -1772,7 +1772,27 @@ function partition_result_iterator(RI::ResultIterator, predicate::Function)
 
     partitioned_iterators = Vector{ResultIterator}([])
     all_keys = Vector{Any}([])
+    #If RI has a bitmas, then we pull it as BM
+    BM = RI.bitmask
+    D = length(RI)
+    if BM !== nothing
+        D = length(RI.bitmask)
+#        println("Inputted Result Iterator has a Bitmask of length $D with $(count(BM)) true bits")
+    end
     for (key, bm) in partitions
+        if BM !== nothing
+            #bm is a bitvector of length equal to the number of 'true' bits in BM
+            #we need to expand it to be of length d, where the 'true' bits are in the positions where BM is true and partitions[key] is true
+            expanded_bm = BitVector([false for i in 1:D])
+            bm_index = 1
+            for i in 1:D
+                if BM[i]
+                    expanded_bm[i] = bm[bm_index]
+                    bm_index += 1
+                end
+            end
+            bm = expanded_bm
+        end
         push!(partitioned_iterators, ResultIterator(RI.starts, RI.S, bm))
         push!(all_keys,key)
     end
@@ -1972,7 +1992,8 @@ function certification_in_buckets(F,
         current_RI = current_RI_and_def[1]
         trace_sig_def = current_RI_and_def[2]
         println("Certifying bucket ",i," of size ",length(current_RI))
-        C=certify(F,collect(current_RI);threading=threading,show_progress=show_progress,kwargs...)
+        CRI = collect(current_RI)
+        C=certify(F,CRI;threading=threading,show_progress=show_progress,kwargs...)
         #check all are certified
         for cert in C.certificates
             if cert.certified == false
@@ -1997,57 +2018,36 @@ function certification_in_buckets(F,
     return(true)
 end
 
+# Check that an interval is greater (if signature is true) or smaller than a float. 
+function check_trace_agreement(r::Float64, Interval::Tuple{Arf,Arf}, signature::Bool)
+    signature ? r < Interval[1] : r > Interval[2]
+end
+
+#Check that a complex box is in the correct quadrant defined by a complex number and a signature
+function check_trace_agreement(t::ComplexF64, RealInterval::Tuple{Arf,Arf}, ImaginaryInterval::Tuple{Arf,Arf}, signature::Tuple{Bool,Bool})
+    check_trace_agreement(real(t), RealInterval, signature[1]) && check_trace_agreement(imag(t), ImaginaryInterval, signature[2])
+end
+
 function check_trace_agreement(SC::SolutionCertificate, trace_signature_definition::Tuple{Vector{ComplexF64}, Vector{Bool}})
-    #SC is a SolutionCertificate with certified solution interval SC.I
-    I = SC.I
-    
-    #Get the real and imaginary parts of the interval
-    real_part = [getinterval(i) for i in real(I)] #ith element is a Tuple{Arf,Arf}, the upper and lower bound of the interval at index i
-    imag_part = [getinterval(i) for i in imag(I)] 
+    trace_point = trace_signature_definition[1]
+    full_signature = trace_signature_definition[2]
 
-    part_interval = [[real_part[i], imag_part[i]] for i in 1:length(real_part)]
+    for i in 1:length(trace_point)
+        #Pull the correct complex box, coordinate, and signature 
+        t = trace_point[i]
+        #TODO: consider pairing up real/imag signatures so that we can 
+                #just call full_signature[i]. 
+        signature = (full_signature[2*i-1], full_signature[2*i])
+        #Pull box
+        I = SC.I
+        real_interval = getinterval(real(I[i]))
+        imag_interval = getinterval(imag(I[i]))
 
-    #trace_signature_definition is a tuple (trace,signature) where trace is a Vector{ComplexF64} and signature is a Vector{Bool}
-    #   which indicates for each of the real and imaginary parts of the trace, whether the corresponding part of the solution is larger or smaller
-    trace = trace_signature_definition[1]
-    signature = trace_signature_definition[2]
-    
-    # Verify that each interval respects the signature constraints
-    # signature[2i-1] corresponds to real part of trace[i]
-    # signature[2i] corresponds to imaginary part of trace[i]
-    for i in 1:length(trace)
-        trace_val = trace[i]
-        real_interval = part_interval[i][1]  # (lower, upper) bounds for real part
-        imag_interval = part_interval[i][2]  # (lower, upper) bounds for imaginary part
-        
-        # Check real part constraint
-        real_sig_idx = 2*i - 1
-        if real_sig_idx <= length(signature)
-            if signature[real_sig_idx]  # real part should be > real(trace)
-                if real_interval[1] <= real(trace_val)
-                    return(false)
-                end
-            else  # real part should be < real(trace)
-                if real_interval[2] >= real(trace_val)
-                    return(false)
-                end
-            end
-        end
-        
-        # Check imaginary part constraint
-        imag_sig_idx = 2*i
-        if imag_sig_idx <= length(signature)
-            if signature[imag_sig_idx]  # imag part should be > imag(trace)
-                if imag_interval[1] <= imag(trace_val)
-                    return(false)
-                end
-            else  # imag part should be < imag(trace)
-                if imag_interval[2] >= imag(trace_val)
-                    return(false)
-                end
-            end
+        #Check coordinate is in correct region defined by signature
+        if !check_trace_agreement(t, real_interval, imag_interval, signature)
+            return(false)
         end
     end
-    
     return(true)
 end
+    
