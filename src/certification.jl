@@ -1854,6 +1854,39 @@ function trace_partition(RI::ResultIterator)
 end
 
 """
+    random_partition(RI::ResultIterator)
+Partition a [`ResultIterator`](@ref) using a random distinguishing point. 
+
+
+
+"""
+
+function random_partition(RI::ResultIterator)
+    s = solution(first(RI))
+    n = length(s)
+    random_shifted_point = s +rand(ComplexF64, n)
+    function random_signature(PR::PathResult)
+        s = solution(PR)
+        signature = BitVector([])
+        for i in 1:length(s)
+            if real(s[i]) > real(random_shifted_point[i])
+                push!(signature, true)
+            elseif real(s[i]) < real(random_shifted_point[i])
+                push!(signature, false)
+            end
+            if imag(s[i]) > imag(random_shifted_point[i])
+                push!(signature, true)
+            elseif imag(s[i]) < imag(random_shifted_point[i])
+                push!(signature, false)
+            end
+        end
+        return(signature)
+    end
+    (partitioned_iterators,all_signatures) = partition_result_iterator(RI, random_signature)
+    return((random_shifted_point, [(all_signatures[i],partitioned_iterators[i]) for i in 1:length(partitioned_iterators)]))
+end
+
+"""
     partition_until_small(RI::ResultIterator, k::Int64)
 
 Recursively partition a [`ResultIterator`](@ref) using trace signatures until all partitions have at most `k` elements.
@@ -1918,6 +1951,34 @@ function partition_until_small(RI::ResultIterator, k::Int64)
     end
     return RI_buckets
 end
+
+"""  
+ random_partition_until_small(RI::ResultIterator, k::Int64)
+
+"""
+function random_partition_until_small(RI::ResultIterator, k::Int64; max_attempts::Int = 10)
+    #RI_buckets is a vector of pairs - each pair is a ResultIterator and another vector of pairs of traces and signatures. 
+    RI_buckets = Vector{Tuple{ResultIterator,Vector{Tuple{Vector{ComplexF64},Vector{Bool}}}}}([(RI,[])])
+    while max(length.(first.(RI_buckets))...) > k
+        new_RI_buckets = Vector{Tuple{ResultIterator,Vector{Tuple{Vector{ComplexF64},Vector{Bool}}}}}()
+        for (current_RI, trace_sig_def) in RI_buckets
+            println("Length: ", length(current_RI))
+            if length(current_RI) <= k 
+                push!(new_RI_buckets, (current_RI, trace_sig_def))
+            else
+                println("Breaking up")
+                (ri_trace, sig_iterator_pairs) = random_partition(current_RI)
+                println("Broke up into parts of sizes ",length.(last.(sig_iterator_pairs)))
+                for p in sig_iterator_pairs
+                    push!(new_RI_buckets, (p[2],vcat(trace_sig_def,[(ri_trace,p[1])])))
+                end
+            end
+        end
+        RI_buckets = new_RI_buckets # we repeat until all buckets have size at most k
+    end
+    return RI_buckets
+end
+
 
 
 """
@@ -2051,3 +2112,14 @@ function check_trace_agreement(SC::SolutionCertificate, trace_signature_definiti
     return(true)
 end
     
+
+function random_univariate(d)
+    @var x
+    f = rand(Float64) + rand(Float64)*x
+    for i = 2:d
+        f += (-10 + rand()*20)*x^i
+    end
+    F = System([f])
+    return F
+end
+
