@@ -2115,10 +2115,7 @@ end
 
 function random_univariate(d)
     @var x
-    f = rand(Float64) + rand(Float64)*x
-    for i = 2:d
-        f += (-10 + rand()*20)*x^i
-    end
+    f = prod([(x-randn(ComplexF64)) for i in 1:d])
     F = System([f])
     return F
 end
